@@ -1,8 +1,10 @@
 import streamlit as st
 import requests
 import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
 
-API_URL = "http://54.210.153.26:8000/predict"
+API_URL = "http://54.210.153.26:8000"
 
 st.set_page_config(
     page_title="MLB Career Longevity Predictor",
@@ -10,83 +12,209 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("⚾ MLB Career Longevity Predictor")
-st.markdown("Enter a player's current season stats and injury history to predict how many years they have left in their MLB career.")
+# Custom styling
+st.markdown("""
+<style>
+    .main { background-color: #0e1117; }
+    .stTitle { color: #ffffff; font-size: 3rem; }
+    .metric-card {
+        background-color: #1e2130;
+        border-radius: 10px;
+        padding: 20px;
+        margin: 10px 0;
+        border-left: 4px solid #1f77b4;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-st.subheader("Player Stats")
-col1, col2, col3 = st.columns(3)
+st.title("⚾ MLB Career Longevity Predictor")
+st.markdown("Search any MLB position player to see their career trajectory and projected years remaining.")
+
+# ── Player Search ─────────────────────────────────────────
+st.subheader("Player Search")
+col1, col2, col3 = st.columns([2, 2, 1])
 
 with col1:
-    age = st.number_input("Age", min_value=18, max_value=45, value=27)
-    wOBA = st.number_input("wOBA (this season)", min_value=0.0, max_value=0.600, value=0.320, step=0.001, format="%.3f")
-    lag_wOBA = st.number_input("wOBA (last season)", min_value=0.0, max_value=0.600, value=0.315, step=0.001, format="%.3f")
-    lag_PA = st.number_input("Plate Appearances (last season)", min_value=0, max_value=800, value=450)
-
+    first_name = st.text_input("First Name", placeholder="e.g. mike")
 with col2:
-    career_PA = st.number_input("Career Plate Appearances", min_value=0, max_value=15000, value=2000)
-    career_G = st.number_input("Career Games Played", min_value=0, max_value=3500, value=500)
-    years_in_league = st.number_input("Years in League", min_value=0, max_value=30, value=3)
-
+    last_name = st.text_input("Last Name", placeholder="e.g. trout")
 with col3:
-    total_injuries = st.number_input("Injuries This Season", min_value=0, max_value=20, value=0)
-    avg_severity = st.number_input("Avg Injury Severity (0-10)", min_value=0.0, max_value=10.0, value=0.0, step=0.1)
-    career_injuries = st.number_input("Career Total Injuries", min_value=0, max_value=50, value=2)
-    career_severity = st.number_input("Career Total Severity", min_value=0.0, max_value=100.0, value=5.0, step=0.1)
-    missed_prev_year = st.number_input("Missed Previous Year? (0=No, 1=Yes)", min_value=0, max_value=1, value=0)
+    st.markdown("<br>", unsafe_allow_html=True)
+    search = st.button("🔍 Search", use_container_width=True)
 
-if st.button("🔮 Predict Career Longevity", use_container_width=True):
-    payload = {
-        "age": age,
-        "wOBA": wOBA,
-        "lag_wOBA": lag_wOBA,
-        "lag_PA": lag_PA,
-        "career_PA": career_PA,
-        "career_G": career_G,
-        "years_in_league": years_in_league,
-        "total_injuries": total_injuries,
-        "avg_severity": avg_severity,
-        "career_injuries": career_injuries,
-        "career_severity": career_severity,
-        "missed_prev_year": missed_prev_year
-    }
-
-    with st.spinner("Predicting..."):
+if search and first_name and last_name:
+    with st.spinner(f"Loading {first_name.title()} {last_name.title()}'s career data..."):
         try:
-            response = requests.post(API_URL, json=payload, timeout=30)
-            result = response.json()
+            response = requests.get(
+                f"{API_URL}/player/{first_name.lower().strip()}/{last_name.lower().strip()}",
+                timeout=30
+            )
 
-            prediction = result["prediction"]
-            final_season = result["estimated_final_season"]
+            if response.status_code == 404:
+                st.error("Player not found. Check spelling and try again.")
+                st.stop()
 
+            data = response.json()
+            career = data["career_history"]
+
+            # ── Player Header ─────────────────────────────
             st.divider()
-            st.subheader("Prediction Results")
+            name = f"{data['nameFirst'].title()} {data['nameLast'].title()}"
+            st.header(f"⚾ {name}")
 
-            res_col1, res_col2 = st.columns(2)
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Seasons Played", data["seasons_played"])
+            with col2:
+                st.metric("Latest Season", data["latest_season"])
+            with col3:
+                st.metric("Current Age", int(data["latest_age"]))
+            with col4:
+                st.metric("Predicted Years Remaining", f"{data['prediction']}")
 
-            with res_col1:
-                st.metric(
-                    label="Predicted Years Remaining",
-                    value=f"{prediction} years",
-                    delta=f"Estimated final season: {final_season}"
-                )
+            # ── Career wOBA Trajectory ─────────────────────
+            st.divider()
+            st.subheader("Career Performance Trajectory")
 
-                if prediction >= 8:
-                    st.success("Long career ahead — elite longevity profile")
-                elif prediction >= 4:
-                    st.info("Solid career runway remaining")
-                elif prediction >= 2:
-                    st.warning("Limited years remaining — key decision window")
-                else:
-                    st.error("Career may be nearing its end")
+            years = [r["yearID"] for r in career]
+            wobas = [r["wOBA"] for r in career]
+            ages = [r["age"] for r in career]
 
-            with res_col2:
-                fig = go.Figure(go.Indicator(
+            # Project future seasons
+            prediction = data["prediction"]
+            last_year = data["latest_season"]
+            last_woba = wobas[-1]
+            avg_woba = sum(wobas) / len(wobas)
+
+            future_years = list(range(last_year + 1, last_year + int(prediction) + 2))
+            future_wobas = [
+                max(0.200, last_woba - (i * 0.008))
+                for i in range(1, len(future_years) + 1)
+            ]
+
+            fig = go.Figure()
+
+            # Actual career line
+            fig.add_trace(go.Scatter(
+                x=years,
+                y=wobas,
+                mode="lines+markers",
+                name="Actual wOBA",
+                line=dict(color="#1f77b4", width=3),
+                marker=dict(size=8),
+                hovertemplate="Year: %{x}<br>wOBA: %{y:.3f}<extra></extra>"
+            ))
+
+            # Career average line
+            fig.add_hline(
+                y=avg_woba,
+                line_dash="dash",
+                line_color="gray",
+                annotation_text=f"Career Avg: {avg_woba:.3f}"
+            )
+
+            # Projected career line
+            fig.add_trace(go.Scatter(
+                x=[last_year] + future_years,
+                y=[last_woba] + future_wobas,
+                mode="lines+markers",
+                name="Projected wOBA",
+                line=dict(color="#ff7f0e", width=2, dash="dot"),
+                marker=dict(size=6, symbol="diamond"),
+                hovertemplate="Year: %{x}<br>Projected wOBA: %{y:.3f}<extra></extra>"
+            ))
+
+            fig.update_layout(
+                xaxis_title="Season",
+                yaxis_title="wOBA",
+                height=400,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                plot_bgcolor="#1e2130",
+                paper_bgcolor="#0e1117",
+                font=dict(color="white"),
+                xaxis=dict(gridcolor="#2a2d3e"),
+                yaxis=dict(gridcolor="#2a2d3e")
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+            # ── Survival Curve ────────────────────────────
+            st.subheader("Career Survival Probability")
+
+            survival_years = list(range(0, 16))
+            survival_probs = [
+                max(0, 100 * (1 - (i / (prediction + 0.001)) ** 1.5))
+                for i in survival_years
+            ]
+
+            fig2 = go.Figure()
+            fig2.add_trace(go.Scatter(
+                x=survival_years,
+                y=survival_probs,
+                mode="lines",
+                fill="tozeroy",
+                name="Survival Probability",
+                line=dict(color="#2ca02c", width=3),
+                fillcolor="rgba(44, 160, 44, 0.2)",
+                hovertemplate="Years from now: %{x}<br>Probability: %{y:.1f}%<extra></extra>"
+            ))
+
+            fig2.update_layout(
+                xaxis_title="Years From Now",
+                yaxis_title="Probability of Still Playing (%)",
+                height=350,
+                plot_bgcolor="#1e2130",
+                paper_bgcolor="#0e1117",
+                font=dict(color="white"),
+                xaxis=dict(gridcolor="#2a2d3e"),
+                yaxis=dict(gridcolor="#2a2d3e", range=[0, 105])
+            )
+
+            st.plotly_chart(fig2, use_container_width=True)
+
+            # ── Injury History ────────────────────────────
+            st.subheader("Injury History by Season")
+
+            injuries = [r["career_injuries"] for r in career]
+
+            fig3 = go.Figure()
+            fig3.add_trace(go.Bar(
+                x=years,
+                y=injuries,
+                name="Career Injuries",
+                marker_color="#d62728",
+                hovertemplate="Year: %{x}<br>Career Injuries: %{y}<extra></extra>"
+            ))
+
+            fig3.update_layout(
+                xaxis_title="Season",
+                yaxis_title="Cumulative Career Injuries",
+                height=300,
+                plot_bgcolor="#1e2130",
+                paper_bgcolor="#0e1117",
+                font=dict(color="white"),
+                xaxis=dict(gridcolor="#2a2d3e"),
+                yaxis=dict(gridcolor="#2a2d3e")
+            )
+
+            st.plotly_chart(fig3, use_container_width=True)
+
+            # ── Prediction Summary ────────────────────────
+            st.divider()
+            st.subheader("Career Longevity Prediction")
+
+            pred_col1, pred_col2 = st.columns(2)
+
+            with pred_col1:
+                fig4 = go.Figure(go.Indicator(
                     mode="gauge+number",
-                    value=prediction,
-                    title={"text": "Years Remaining"},
+                    value=data["prediction"],
+                    title={"text": "Predicted Years Remaining", "font": {"color": "white"}},
+                    number={"font": {"color": "white"}},
                     gauge={
-                        "axis": {"range": [0, 20]},
+                        "axis": {"range": [0, 20], "tickcolor": "white"},
                         "bar": {"color": "#1f77b4"},
+                        "bgcolor": "#1e2130",
                         "steps": [
                             {"range": [0, 3], "color": "#ff4444"},
                             {"range": [3, 7], "color": "#ffaa00"},
@@ -94,11 +222,37 @@ if st.button("🔮 Predict Career Longevity", use_container_width=True):
                         ],
                     }
                 ))
-                fig.update_layout(height=300, margin=dict(t=40, b=0))
-                st.plotly_chart(fig, use_container_width=True)
+                fig4.update_layout(
+                    height=300,
+                    paper_bgcolor="#0e1117",
+                    font=dict(color="white")
+                )
+                st.plotly_chart(fig4, use_container_width=True)
+
+            with pred_col2:
+                st.markdown("<br><br>", unsafe_allow_html=True)
+                if data["prediction"] >= 8:
+                    st.success(f"🟢 **Elite Longevity Profile** — {name} projects to play until approximately **{data['estimated_final_season']}**")
+                elif data["prediction"] >= 4:
+                    st.info(f"🔵 **Solid Career Runway** — {name} projects to play until approximately **{data['estimated_final_season']}**")
+                elif data["prediction"] >= 2:
+                    st.warning(f"🟡 **Limited Years Remaining** — {name} projects to play until approximately **{data['estimated_final_season']}**")
+                else:
+                    st.error(f"🔴 **Career Nearing End** — {name} may have only **{data['prediction']} years** remaining")
+
+                st.markdown(f"""
+                - **Seasons in dataset:** {data['seasons_played']}
+                - **Last recorded season:** {data['latest_season']}
+                - **Age at last season:** {int(data['latest_age'])}
+                - **Estimated final season:** {data['estimated_final_season']}
+                """)
 
         except Exception as e:
-            st.error(f"Error connecting to prediction API: {e}")
+            st.error(f"Error: {e}")
 
+elif search:
+    st.warning("Please enter both first and last name.")
+
+# ── Footer ────────────────────────────────────────────────
 st.divider()
-st.caption("Model: Random Forest Regressor | MAE: ~2.53 years | R²: 0.363 | Trained on MLB position player data | Pipeline: S3 → Databricks → MLflow → EC2 FastAPI")
+st.caption("Model: Random Forest Regressor | MAE: ~2.53 years | R²: 0.363 | Pipeline: S3 → Databricks Spark → MLflow → EC2 FastAPI")
