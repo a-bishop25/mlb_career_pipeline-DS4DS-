@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import plotly.graph_objects as go
 
-API_URL = "http://54.210.153.26:8000"
+API_URL = "http://100.54.195.185:8000"
 
 st.set_page_config(
     page_title="MLB Career Longevity Predictor",
