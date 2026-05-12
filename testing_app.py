@@ -13,7 +13,7 @@ Usage: python test_project.py
 import requests
 import sys
 
-API_URL = "http://54.210.153.26:8000"
+API_URL = "http://100.54.195.185:8000"
 
 print("=" * 50)
 print("MLB Career Longevity Predictor — API Test")
